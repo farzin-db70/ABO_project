@@ -46,6 +46,8 @@
 /* Private variables ---------------------------------------------------------*/
 uint8_t text[100];
 uint16_t* readADC;
+uint16_t readedTemp,readedWaterLvl;
+uint8_t setTemp,tempTelorance,setWaterLvl,waterLvlTelorance;
 /* Private function prototypes -----------------------------------------------*/
 void Delay (uint16_t nCount);
 static void ADC_Config(void);
@@ -54,6 +56,8 @@ static void TIM2_Config(void);
 void UART1_setup(void);
 uint16_t* readAllADC(void);
 void SendData(uint8_t *data, unsigned int len);
+
+void LoopFunction(void);
 
 /* Private functions ---------------------------------------------------------*/
 /* Public functions ----------------------------------------------------------*/
@@ -76,14 +80,42 @@ void main(void)
   readADC = calloc(6,sizeof(unsigned char));
   while (1)
   {
+    LoopFunction();
+    
+    
+    
+    
     
 //    readADC = readAllADC();
 //    sprintf((char*)text,"pot:%u,%u,%u\r\n",readADC[0],readADC[1]);
 //    SendData(text,strlen((const char*)text));
-//    for(unsigned char i=0;i<15;i++)Delay(0xFFFF);
-//    GPIO_WriteReverse(RELAY1);
   }
 }
+
+void LoopFunction(void){
+  //raed temp and water level sensor 
+  readADC = readAllADC();
+  //calculate temp from sensors value 
+  readedTemp = readADC[SENSOR_TEMP_CH]/10;
+  //temp control runtime 
+  if(readedTemp < setTemp-tempTelorance){
+    ON(HEATER);
+  }else if (readedTemp > setTemp + tempTelorance){
+    OFF(HEATER);
+  }
+
+  //calculate water level from sensors value 
+  readedWaterLvl = readADC[SENSOR_WATER_LVL_CH]/102;
+  //water level control runtime 
+  if(readedWaterLvl < setWaterLvl-waterLvlTelorance){
+    ON(WATER_VALVE);
+  }else if (readedWaterLvl > setWaterLvl + waterLvlTelorance){
+    OFF(WATER_VALVE);
+  }
+  
+  
+}
+
 
 void SendData(uint8_t *data, unsigned int len) {
   unsigned int l;
@@ -115,12 +147,12 @@ uint16_t* readAllADC(void){
 static void GPIO_Config(void)
 {
   /* Initialize I/Os in Output Mode */
-  GPIO_Init(RELAY1, GPIO_MODE_OUT_PP_LOW_FAST);
-  GPIO_Init(RELAY2, GPIO_MODE_OUT_PP_LOW_FAST);
-  GPIO_Init(RELAY3, GPIO_MODE_OUT_PP_LOW_FAST);
-  GPIO_Init(RELAY4, GPIO_MODE_OUT_PP_LOW_FAST);
-  GPIO_Init(MOTOR_1, GPIO_MODE_OUT_PP_LOW_FAST);
-  GPIO_Init(MOTOR_2, GPIO_MODE_OUT_PP_LOW_FAST);
+  GPIO_Init(WATER_POMP, GPIO_MODE_OUT_PP_LOW_FAST);
+  GPIO_Init(AIR_POMP, GPIO_MODE_OUT_PP_LOW_FAST);
+  GPIO_Init(HEATER, GPIO_MODE_OUT_PP_LOW_FAST);
+  GPIO_Init(WATER_VALVE, GPIO_MODE_OUT_PP_LOW_FAST);
+  GPIO_Init(FEADER, GPIO_MODE_OUT_PP_LOW_FAST);
+  GPIO_Init(LIGHT, GPIO_MODE_OUT_PP_LOW_FAST);
 }
 
 void UART1_setup(void)
@@ -139,8 +171,8 @@ void UART1_setup(void)
 
 static void ADC_Config()
 {
-  GPIO_Init(SENSOR_1, GPIO_MODE_IN_FL_NO_IT);
-  GPIO_Init(SENSOR_2, GPIO_MODE_IN_FL_NO_IT);
+  GPIO_Init(SENSOR_WATER_LVL, GPIO_MODE_IN_FL_NO_IT);
+  GPIO_Init(SENSOR_TEMP, GPIO_MODE_IN_FL_NO_IT);
   ADC1_Init(ADC1_CONVERSIONMODE_CONTINUOUS,
                  ADC1_CHANNEL_2,
                  ADC1_PRESSEL_FCPU_D18,
