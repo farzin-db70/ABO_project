@@ -21,12 +21,12 @@
                 <option>
                     <name>GenCodeModel</name>
                     <version>0</version>
-                    <state>1</state>
+                    <state>0</state>
                 </option>
                 <option>
                     <name>GenDataModel</name>
                     <version>0</version>
-                    <state>1</state>
+                    <state>0</state>
                 </option>
                 <option>
                     <name>GOutputBinary</name>
@@ -60,7 +60,7 @@
                 </option>
                 <option>
                     <name>GenRTConfigPath</name>
-                    <state>$TOOLKIT_DIR$\LIB\dlstm8mmn.h</state>
+                    <state>$TOOLKIT_DIR$\LIB\dlstm8ssn.h</state>
                 </option>
                 <option>
                     <name>GenLibInFormatter</name>

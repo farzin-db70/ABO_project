@@ -1,5 +1,5 @@
 #define STM8S003
-
+#define F_CPU 8000000UL
 #include "stm8s.h"
 #include "globalVar.h"
 #include <math.h>
@@ -13,11 +13,13 @@
 /* Private macro -------------------------------------------------------------*/
 /* Private variables ---------------------------------------------------------*/
 uint8_t text[100];
-uint16_t* readADC;
+uint16_t readADC[2];
 uint16_t readedTemp,readedWaterLvl;
 uint8_t setTemp,tempTelorance,setWaterLvl,waterLvlTelorance;
 
-volatile uint8_t rxBuffer[100],rxCounter , recivePacketFlag;
+uint16_t mainCounter;
+
+uint8_t rxBuffer[100],rxCounter , recivePacketFlag;
 /* Private function prototypes -----------------------------------------------*/
 void Delay (uint16_t nCount);
 static void ADC_Config(void);
@@ -25,7 +27,7 @@ static void GPIO_Config(void);
 static void TIM2_Config(void);
 static void ClOCK_Config(void);
 static void UART1_setup(void);
-uint16_t* readAllADC(void);
+void readAllADC(uint16_t *saveBuffer);
 void SendData(uint8_t *data, unsigned int len);
 void LoopFunction(void);
 
@@ -43,7 +45,6 @@ void main(void)
   GPIO_Config();
   ADC_Config();
   UART1_setup();
-  readADC = calloc(6,sizeof(unsigned char));
   enableInterrupts();
   while (1)
   {
@@ -56,52 +57,63 @@ void main(void)
 
 
 void LoopFunction(void){
-  //raed temp and water level sensor 
-  readADC = readAllADC();
-  //calculate temp from sensors value 
-  readedTemp = readADC[SENSOR_TEMP_CH]/10;
-  //temp control runtime 
-  if(readedTemp < setTemp-tempTelorance){
-    ON(HEATER);
-  }else if (readedTemp > setTemp + tempTelorance){
-    OFF(HEATER);
+  mainCounter++;
+  if(mainCounter==500){
+    //raed temp and water level sensor 
+    readAllADC(readADC);
+    //calculate temp from sensors value 
+    readedTemp = readADC[SENSOR_TEMP_CH]/10;
+    //temp control runtime 
+    if(readedTemp < setTemp-tempTelorance){
+      ON(HEATER);
+    }else if (readedTemp > setTemp + tempTelorance){
+      OFF(HEATER);
+    }
+    
+    //calculate water level from sensors value 
+    readedWaterLvl = readADC[SENSOR_WATER_LVL_CH]/102;
+    //water level control runtime 
+    if(readedWaterLvl < setWaterLvl-waterLvlTelorance){
+      ON(WATER_VALVE);
+    }else if (readedWaterLvl > setWaterLvl + waterLvlTelorance){
+      OFF(WATER_VALVE);
+    }
+    
+    //send water level and temp to esp12
+//    sprintf((char*)text,"pot:%u,%u\r\n",readADC[0],readADC[1]);
+//    SendData(text,strlen((const char*)text));
   }
-  
-  
-  //calculate water level from sensors value 
-  readedWaterLvl = readADC[SENSOR_WATER_LVL_CH]/102;
-  //water level control runtime 
-  if(readedWaterLvl < setWaterLvl-waterLvlTelorance){
-    ON(WATER_VALVE);
-  }else if (readedWaterLvl > setWaterLvl + waterLvlTelorance){
-    OFF(WATER_VALVE);
+  if(mainCounter==600){
+    if(recivePacketFlag==1){
+      sprintf((char*)text,"test for ever!\n");
+      SendData(text,strlen((const char*)text));
+      SendData(rxBuffer,(unsigned int)rxCounter);
+      for(unsigned char i=0;i<100;i++)rxBuffer[i]=0; //clean the buffer 
+      rxCounter=0;
+      recivePacketFlag = 0;
+    }
   }
-  if(recivePacketFlag==1){
-    SendData((uint8_t *)rxBuffer,(unsigned int)rxCounter);
-    rxCounter=0;
-    recivePacketFlag = 0;
-  }
-  //send water level and temp to esp12
-  //sprintf((char*)text,"pot:%u,%u,%u\r\n",readADC[0],readADC[1]);
-  //SendData(text,strlen((const char*)text));
+  if(mainCounter==1000)mainCounter=0;
 }
 
 
 void SendData(uint8_t *data, unsigned int len) {
+  disableInterrupts();
   unsigned int l;
   for (l = 0; l < len; l++) {
     while (!((UART1->SR) & UART1_SR_TC));
     UART1->DR = data[l];
   }
+  enableInterrupts();
 }
 
-uint16_t* readAllADC(void){
-  static uint8_t adcBuffer[2][2];
+void readAllADC(uint16_t *saveBuffer){
+  uint8_t adcBuffer[2][2];
+  ADC1->CR1 |= ADC1_CR1_ADON; //start converion
   ADC1->CSR |= (uint8_t)(0x0F); //select all channel 
   ADC1->CR3 |= ADC1_CR3_DBUF; //enable adc buffer
   ADC1->CR2 |= ADC1_CR2_SCAN; //enable adc scan mode
   ADC1->CR1 |= ADC1_CR1_CONT; //enable adc continus mode
-  ADC1->CR1 |= ADC1_CR1_ADON; //start converion
   while(ADC1_GetFlagStatus(ADC1_FLAG_EOC) == RESET);
   adcBuffer[0][0] = (uint8_t)(ADC1->DB2RH)&0x03;
   adcBuffer[0][1] = (uint8_t)(ADC1->DB2RL);
@@ -110,19 +122,22 @@ uint16_t* readAllADC(void){
   ADC1->CSR &= (uint8_t)(~ADC1_FLAG_EOC);
   ADC1->CR1 &= (uint8_t)(~ADC1_CR1_ADON);
   ADC1->CR1 &= (uint8_t)(~ADC1_CR1_CONT);
-  return (uint16_t*)adcBuffer;
+  saveBuffer[0] = ((uint16_t*)adcBuffer)[0];
+  saveBuffer[1] = ((uint16_t*)adcBuffer)[1];
+  Delay(0xFFFF);
 }
 
 
 static void ClOCK_Config(void){
-  CLK_HSECmd(DISABLE);
+  CLK_DeInit();
+  CLK_HSECmd(ENABLE);
   CLK_LSICmd(DISABLE);
-  CLK_HSICmd(ENABLE);
-                                
-  CLK_HSIPrescalerConfig(CLK_PRESCALER_HSIDIV1);
+  CLK_HSICmd(DISABLE);
+  CLK_ClockSwitchConfig(CLK_SWITCHMODE_AUTO,CLK_SOURCE_HSE,DISABLE,CLK_CURRENTCLOCKSTATE_DISABLE);
   CLK_SYSCLKConfig(CLK_PRESCALER_CPUDIV1);
-                                
-
+  CLK_ClockSecuritySystemEnable();
+  
+  
   
   CLK_PeripheralClockConfig(CLK_PERIPHERAL_TIMER4, ENABLE);
   CLK_PeripheralClockConfig(CLK_PERIPHERAL_ADC, ENABLE);
@@ -143,11 +158,11 @@ static void GPIO_Config(void)
 
 static void UART1_setup(void)
 {
-  GPIO_Init(GPIOD, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_FAST);
+  GPIO_Init(GPIOD, GPIO_PIN_5, GPIO_MODE_OUT_PP_HIGH_SLOW);
   GPIO_Init(GPIOD, GPIO_PIN_6, GPIO_MODE_IN_FL_NO_IT);
   UART1_DeInit();
   
-  UART1_Init(9600,
+  UART1_Init(4800,
              UART1_WORDLENGTH_8D,
              UART1_STOPBITS_1,
              UART1_PARITY_NO,

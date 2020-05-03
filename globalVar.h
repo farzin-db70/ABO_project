@@ -26,4 +26,7 @@
 #define ON(RELAY)               GPIO_WriteHigh(RELAY)
 #define OFF(RELAY)              GPIO_WriteLow(RELAY)
 
+
+extern uint8_t rxBuffer[100],rxCounter , recivePacketFlag;
+
 #endif
