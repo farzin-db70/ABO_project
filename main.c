@@ -16,10 +16,9 @@ uint8_t text[100];
 uint16_t readADC[2];
 uint16_t readedTemp,readedWaterLvl;
 uint8_t setTemp,tempTelorance,setWaterLvl,waterLvlTelorance;
-
 uint16_t mainCounter;
-
 uint8_t rxBuffer[100],rxCounter , recivePacketFlag;
+
 /* Private function prototypes -----------------------------------------------*/
 void Delay (uint16_t nCount);
 static void ADC_Config(void);
@@ -29,7 +28,12 @@ static void ClOCK_Config(void);
 static void UART1_setup(void);
 void readAllADC(uint16_t *saveBuffer);
 void SendData(uint8_t *data, unsigned int len);
-void LoopFunction(void);
+void CleanRecivedBuffer(void);
+void Repoet2Esp(void);
+void ReadCommandFromEsp(void);
+void ControlParamiters(void);
+unsigned char Parse_Do(uint8_t * inputBuffer);
+void ReadKey_do(void);
 
 /* Private functions ---------------------------------------------------------*/
 /* Public functions ----------------------------------------------------------*/
@@ -48,54 +52,160 @@ void main(void)
   enableInterrupts();
   while (1)
   {
-    LoopFunction();
+    mainCounter++;
+    ReadKey_do();
+    if(mainCounter%90)ControlParamiters();
+    if(mainCounter%100)ReadCommandFromEsp();
+    if(mainCounter==1)Repoet2Esp();
+    if(mainCounter==500)mainCounter=0;
+  }
+}
+
+
+void ReadKey_do(void){
+  static char keyDebounce=0;
+  
+  /*runtime for force feed switch and debouncce*/
+  for(unsigned char i=0;i<10;i++){
+    if(Read(FORCE_FEED))keyDebounce++;
+    Delay(10);
+  }
+  if(keyDebounce>6){
+    ON(FEADER);
+    Delay(3000);
+    OFF(FEADER);
+    return;
+  }else{
+    keyDebounce=0;
+  }
+  
+  /*runtime for force clean switch and debouncce*/
+  for(unsigned char i=0;i<10;i++){
+    if(Read(FORCE_CLEAN))keyDebounce++;
+    Delay(10);
+  }
+  if(keyDebounce>6){
+    Tgl(WATER_POMP);
+    return;
+  }else{
+    keyDebounce=0;
+  }
+}
+
+
+void ReadCommandFromEsp(void){
+  unsigned char commandState;
+  if(recivePacketFlag==1){
+    SendData(rxBuffer,(unsigned int)rxCounter);
+    commandState = Parse_Do(rxBuffer);
+    if(commandState == ACK){
+      Report_ACK();
+    }
+    CleanRecivedBuffer();
+  }
+}
+
+unsigned char Parse_Do(uint8_t * inputBuffer){
+  unsigned char command = inputBuffer[2];
+  switch(command){
+  case 0x01:    //run the feeder command
+    ON(FEADER);
+    Delay(inputBuffer[2]*1000);
+    OFF(FEADER);
+    return ACK;
+  case 0x02:    //lighting command = ON 
+    ON(LIGHT);
+    return ACK;
+  case 0x03:    //lighting command = OFF
+    OFF(LIGHT);
+    return ACK;
+  case 0x04:    //Cleaner motor command = ON 
+    ON(WATER_POMP);
+    SendData("cl->ON",5);
+    return ACK;
+  case 0x05:    //Cleaner motor command = OFF
+    OFF(WATER_POMP);
+    SendData("cl->OF",5);
+    return ACK;
+  case 0x06:    //air Pomp command = ON
+    ON(AIR_POMP);
+    SendData("ar->ON",5);
+    return ACK;
+  case 0x07:    //air Pomp command =OFF
+    OFF(AIR_POMP);
+    SendData("ar->OF",5);
+    return ACK;
+  case 0x08:    //change water level and temp limit switch
+    OFF(AIR_POMP);
+    SendData("ar->OF",5);
+    return ACK;
+  } 
+  return NACK;
+}
+
+
+
+void Repoet2Esp(void){
+  //send water level and temp to esp12
+  sprintf((char*)text,"pot:%u,%u\r\n",readADC[0],readADC[1]);
+  SendData(text,strlen((const char*)text));
+}
+
+/*raed the situation paramiters and control temp and water flow
+recomanded -> on version 2: added water acideite */
+void ControlParamiters(void){
+  static unsigned char tErrRunOnce=1, wErrRunOnce=1;
+  //raed temp and water level sensor 
+  readAllADC(readADC);
+  //calculate temp from sensors value 
+  readedTemp = readADC[SENSOR_TEMP_CH]/10;
+  //temp control runtime 
+  if(readedTemp < setTemp-tempTelorance){
+    ON(HEATER);
+  }else if (readedTemp > setTemp + tempTelorance){
+    OFF(HEATER);
+  }
+  
+  if(readedTemp > setTemp + tempTelorance + 3){
+    if(tErrRunOnce)SendData("ERR:overtemp\n",12);
+    tErrRunOnce=0;
+  }else{
+    tErrRunOnce=1;
+  }
+  
+  //calculate water level from sensors value 
+  readedWaterLvl = readADC[SENSOR_WATER_LVL_CH]/102;
+  //water level control runtime 
+  if(readedWaterLvl < setWaterLvl-waterLvlTelorance){
+    ON(WATER_VALVE);
+  }else if (readedWaterLvl > setWaterLvl + waterLvlTelorance){
+    OFF(WATER_VALVE);
+  }
+  
+  if(readedWaterLvl > setWaterLvl + waterLvlTelorance+1){
+    if(wErrRunOnce)SendData("ERR:overFlow\n",12);
+    wErrRunOnce=0;
+  }else{
+    wErrRunOnce=1;
+  }
+  
+  //if error flag is on LED error on and green led is of
+  if((wErrRunOnce==0) || (tErrRunOnce==0)){
+    ON(LED_ERR);
+    OFF(LED_NORAML_STATE);
+  }else{
+    OFF(LED_ERR);
+    ON(LED_NORAML_STATE);
   }
 }
 
 
 
-
-
-void LoopFunction(void){
-  mainCounter++;
-  if(mainCounter==500){
-    //raed temp and water level sensor 
-    readAllADC(readADC);
-    //calculate temp from sensors value 
-    readedTemp = readADC[SENSOR_TEMP_CH]/10;
-    //temp control runtime 
-    if(readedTemp < setTemp-tempTelorance){
-      ON(HEATER);
-    }else if (readedTemp > setTemp + tempTelorance){
-      OFF(HEATER);
-    }
-    
-    //calculate water level from sensors value 
-    readedWaterLvl = readADC[SENSOR_WATER_LVL_CH]/102;
-    //water level control runtime 
-    if(readedWaterLvl < setWaterLvl-waterLvlTelorance){
-      ON(WATER_VALVE);
-    }else if (readedWaterLvl > setWaterLvl + waterLvlTelorance){
-      OFF(WATER_VALVE);
-    }
-    
-    //send water level and temp to esp12
-//    sprintf((char*)text,"pot:%u,%u\r\n",readADC[0],readADC[1]);
-//    SendData(text,strlen((const char*)text));
-  }
-  if(mainCounter==600){
-    if(recivePacketFlag==1){
-      sprintf((char*)text,"test for ever!\n");
-      SendData(text,strlen((const char*)text));
-      SendData(rxBuffer,(unsigned int)rxCounter);
-      for(unsigned char i=0;i<100;i++)rxBuffer[i]=0; //clean the buffer 
-      rxCounter=0;
-      recivePacketFlag = 0;
-    }
-  }
-  if(mainCounter==1000)mainCounter=0;
+void CleanRecivedBuffer(void){
+  for(unsigned char i=0;i<100;i++)rxBuffer[i]=0; //clean the buffer 
+  rxCounter=0;
+  recivePacketFlag = 0;
 }
-
 
 void SendData(uint8_t *data, unsigned int len) {
   disableInterrupts();
@@ -154,6 +264,12 @@ static void GPIO_Config(void)
   GPIO_Init(WATER_VALVE, GPIO_MODE_OUT_PP_LOW_FAST);
   GPIO_Init(FEADER, GPIO_MODE_OUT_PP_LOW_FAST);
   GPIO_Init(LIGHT, GPIO_MODE_OUT_PP_LOW_FAST);
+  
+  GPIO_Init(FORCE_FEED, GPIO_MODE_IN_PU_IT);
+  GPIO_Init(FORCE_CLEAN, GPIO_MODE_IN_PU_IT);
+  
+  GPIO_Init(LED_ERR, GPIO_MODE_OUT_OD_HIZ_FAST);
+  GPIO_Init(LED_NORAML_STATE, GPIO_MODE_OUT_OD_HIZ_FAST);
 }
 
 static void UART1_setup(void)
